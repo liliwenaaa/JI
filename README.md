@@ -24,34 +24,101 @@
 **产品硬边界：不做实盘下单与券商对接。** 交易成本模型、数据信号补齐已写入
 `AI-Index_产品规划_V1.0.md`（§3.1–3.2 / 路线图 V1.5），用于建议质量与回测净收益，不进入执行链路。
 
-## 快速开始
+## 环境安装与使用
 
-本机系统 `python` / `python3` **没有**安装依赖，请使用项目虚拟环境 `.venv`：
+### 要求
+
+- Python **3.11+**（推荐 3.11 / 3.12）
+- 可访问公网（首次拉依赖；运行时拉行情/估值等公开数据）
+- Linux / macOS / Windows 均可；下文以 Linux/macOS 为例
+
+### 为什么要用 `.venv`
+
+系统自带的 `python3`（例如 `/usr/bin/python3`）通常**没有**本项目的依赖。  
+依赖安装在项目目录下的 **`.venv`** 中。请始终用虚拟环境里的解释器，或先 `source .venv/bin/activate`。
+
+**不要**把 `.venv` 拷到另一台电脑直接用：环境绑定本机路径与平台，换机请按下面步骤重建。  
+仓库已用 `.gitignore` 忽略 `.venv/`、`config.yaml`、本地缓存库等。
+
+### 首次安装（新机器 / 克隆后）
+
+```bash
+cd ~/模板/JiJin   # 换成你的项目路径
+
+# 1) 创建虚拟环境
+python3 -m venv .venv
+# 若本机有 uv，也可：uv venv --python 3.11 .venv
+
+# 2) 安装依赖
+.venv/bin/python -m pip install -U pip
+.venv/bin/python -m pip install -r requirements.txt
+# 若用 uv：.venv/bin/uv pip install -r requirements.txt
+
+# 3) 配置（可选）
+cp config.example.yaml config.yaml
+# 按需编辑持仓、总资产、观察指数等；勿提交含隐私的 config.yaml
+```
+
+### 日常启动
 
 ```bash
 cd ~/模板/JiJin
 
-# 首次安装（若还没有 .venv）
-# uv venv --python 3.11 .venv
-# .venv/bin/uv pip install -r requirements.txt
-# 或：source .venv/bin/activate && pip install -r requirements.txt
-
-# 启动图形界面（推荐，不依赖系统 python 命令）
+# 图形界面（推荐）
 .venv/bin/python -m streamlit run app.py
 
-# 也可先激活再启动
+# 等价：先激活再启动（激活后 which python3 应指向 .venv）
 source .venv/bin/activate
-streamlit run app.py
+python3 -m streamlit run app.py
+```
 
-# 命令行
+浏览器打开 http://localhost:8501。
+
+> 不要用系统解释器直接 `python3 app.py`：既缺依赖，也不是 Streamlit 的标准启动方式。
+
+### 命令行
+
+```bash
 .venv/bin/python -m jijin screen
 .venv/bin/python -m jijin alert
 .venv/bin/python -m jijin strategy --risk 均衡 --monthly 3000
 ```
 
-打开 http://localhost:8501。
+### 测试
 
-若出现 `No module named streamlit`，说明没用 `.venv`，请改用上面的 `.venv/bin/python` 命令。
+```bash
+.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
+```
+
+### 换机迁移 checklist
+
+| 带走 | 不要拷贝（到新机重建/忽略） |
+|------|---------------------------|
+| 源码、`requirements.txt`、`config.example.yaml` | `.venv/` |
+| 自用的 `config.yaml`（可加密传输） | `data/*.db` 等缓存（可自动重建） |
+| `.streamlit/config.toml`（主题，若你改过） | `__pycache__/`、本地 CSV 导出 |
+
+新机：克隆/拷贝源码 → 按「首次安装」重建 `.venv` → 放入自己的 `config.yaml` → 启动。
+
+### 常见问题
+
+| 现象 | 原因 | 处理 |
+|------|------|------|
+| `No module named 'streamlit'` / `altair` | 用了系统 `python3` | 改用 `.venv/bin/python -m streamlit run app.py` |
+| 改了代码页面没变 | 若以 `fileWatcherType none` 启动 | 重启 Streamlit 进程 |
+| 依赖装失败 | 网络 / Python 过旧 | 确认 3.11+；换镜像或重试 pip |
+
+## 快速开始（摘要）
+
+```bash
+cd ~/模板/JiJin
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+cp -n config.example.yaml config.yaml
+.venv/bin/python -m streamlit run app.py
+```
+
+打开 http://localhost:8501。
 
 ## 设计与数据流
 

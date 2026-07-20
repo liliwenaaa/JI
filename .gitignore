@@ -1,12 +1,47 @@
+# 虚拟环境（不可跨机拷贝，请在目标机器重建）
 .venv/
+venv/
+env/
+
+# Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
 *.egg-info/
+.eggs/
 dist/
 build/
-data/*.db
-data/*.db-*
+*.egg
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# 用户配置与本地数据（保留示例与空目录约定）
+config.yaml
+data/*.db
+data/*.db-*
+data/*.sqlite
+data/*.sqlite-*
 *.csv
+
+# 编辑器 / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# 本地工具与杂项
 get-pip.py
+.python-version
+uv.lock
+
+# Streamlit 本地密钥（主题 config.toml 可提交）
+.streamlit/secrets.toml
