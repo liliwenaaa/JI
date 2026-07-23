@@ -378,25 +378,56 @@ Telegram 或 App Push。
 ## 目录
 
 ```text
-app.py                         Streamlit 界面
+app.py                         Streamlit 入口（转调插件化 Shell）
 config.yaml                    用户配置、持仓和策略参数
+examples/                      第三方插件示例
 jijin/
+  plugin/                      插件内核（注册表 / 加载器 / 规格）
+  plugins_builtin/             内置页面·Agent·策略·提醒·数据源注册
+  pages/                       页面实现（可替换的 UI 组件）
+  ui/                          Shell / 样式 / 控件 / 后台加载
   data/                        AKShare 数据适配与 SQLite 缓存
-  data/macro.py                PMI/CPI/M2/LPR 宏观数据
-  engine/trend.py              pandas-ta-classic 趋势指标与信号
-  engine/calibrate.py          Walk-Forward 策略参数自动校准
-  engine/macro.py              宏观与政策评分
-  engine/scoring.py            八因子评分
+  engine/                      趋势、评分、宏观、校准
   agents/                      编排与规则解释
-  screener/                    指数基金筛选
+  screener/                    指数机会扫描
   strategy/                    仓位与定投方案
   alert/                       智能提醒
   portfolio/                   持仓数据
-tests/                         规则与趋势引擎测试
+  utils/                       HTTP 超时、后台任务
+tests/                         规则与插件测试
 ```
 
-当前测试覆盖配置合并与权重归一化、趋势指标、估值辅助规则，以及宏观/政策
-评分和手工政策覆盖。执行：
+## 插件化扩展
+
+扩展点（均通过 `jijin.plugin.registry` 注册）：
+
+| 类型 | 用途 | 内置示例 |
+|------|------|----------|
+| Page | Streamlit 页面 | 看板 / 重点机会 / … |
+| Agent | 业务编排 | score / opportunity / dashboard |
+| Strategy | 仓位策略模板 | valuation_dynamic 等 |
+| Alert | 提醒生成器 | position / smart |
+| DataProvider | 行情与宏观数据源 | index_daily / index_valuation |
+
+**加载架构（防卡死）：**
+- 无缓存：阻塞进度面板 + `st.fragment` 每秒刷新；可点「跳过等待」
+- 有缓存刷新：先渲染旧数据，后台更新
+- HTTP/urllib 默认 12s 超时；机会扫描总超时约 75s，超时返回部分结果
+- 换页会 bump generation，旧任务结果不再写入
+
+配置（`config.yaml`）：
+
+```yaml
+plugins:
+  disabled: []          # 禁用页面 id，如 [parameters]
+  modules: []           # 额外模块，需提供 register(registry)
+  entry_points: true    # 扫描 jijin.plugins 入口点
+```
+
+最小自定义页面见 `examples/hello_page_plugin.py`。
+
+当前测试覆盖配置合并与权重归一化、趋势指标、估值辅助规则、宏观/政策
+评分，以及插件注册。执行：
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -p 'test_*.py'

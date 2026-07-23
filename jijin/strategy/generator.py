@@ -118,7 +118,7 @@ RISK_PROFILES: dict[str, dict[str, Any]] = {
 STRATEGY_TEMPLATES: dict[str, dict[str, Any]] = {
     "valuation_dynamic": {
         "label": "估值动态再平衡",
-        "desc": "按各指数 PE 百分位缩放计划仓位，低估多买、高估少买",
+        "desc": "按各指数 PE 百分位缩放基准权重，低估多买、高估少买",
     },
     "core_satellite": {
         "label": "核心宽基 + 卫星",

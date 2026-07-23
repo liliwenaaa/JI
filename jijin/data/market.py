@@ -171,29 +171,37 @@ def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _fetch_raw_daily(symbol: str):
-    import akshare as ak
+    from jijin.utils.timeout import call_with_timeout
 
-    # 1) 新浪
-    try:
-        df = ak.stock_zh_index_daily(symbol=symbol)
-        if df is not None and not df.empty and "date" in df.columns:
-            return _normalize_ohlcv(df)
-    except Exception:
-        pass
+    def _do():
+        import akshare as ak
 
-    # 2) 东方财富（同代码或 csi 前缀）
-    candidates = [symbol]
-    code = symbol[2:] if len(symbol) > 2 and symbol[:2] in {"sh", "sz", "bj"} else symbol
-    if not symbol.startswith("csi"):
-        candidates.append(f"csi{code}")
-    for cand in candidates:
+        # 1) 新浪
         try:
-            df = ak.stock_zh_index_daily_em(symbol=cand)
-            if df is not None and not df.empty:
+            df = ak.stock_zh_index_daily(symbol=symbol)
+            if df is not None and not df.empty and "date" in df.columns:
                 return _normalize_ohlcv(df)
         except Exception:
-            continue
-    return None
+            pass
+
+        # 2) 东方财富（同代码或 csi 前缀）
+        candidates = [symbol]
+        code = symbol[2:] if len(symbol) > 2 and symbol[:2] in {"sh", "sz", "bj"} else symbol
+        if not symbol.startswith("csi"):
+            candidates.append(f"csi{code}")
+        for cand in candidates:
+            try:
+                df = ak.stock_zh_index_daily_em(symbol=cand)
+                if df is not None and not df.empty:
+                    return _normalize_ohlcv(df)
+            except Exception:
+                continue
+        return None
+
+    try:
+        return call_with_timeout(_do, 20)
+    except TimeoutError:
+        return None
 
 
 def fetch_index_daily(

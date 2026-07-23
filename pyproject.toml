@@ -16,6 +16,9 @@ dependencies = [
 [project.scripts]
 jijin = "jijin.cli:main"
 
+[project.entry-points."jijin.plugins"]
+# 第三方可在此挂载：my_plugin = "my_pkg.plugins:register"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"

@@ -122,19 +122,21 @@ def fetch_index_valuation(
 
     import akshare as ak
 
+    from jijin.utils.timeout import call_with_timeout
+
     available = list_pe_indexes(cfg, force=False)
     matched = _resolve_index_name(index_name, available) or index_name
 
     pe_df = None
     last_err: Exception | None = None
-    for attempt in range(3):
+    for attempt in range(2):
         try:
-            pe_df = ak.stock_index_pe_lg(symbol=matched)
+            pe_df = call_with_timeout(ak.stock_index_pe_lg, 20, symbol=matched)
             if pe_df is not None and not pe_df.empty:
                 break
         except Exception as exc:  # noqa: BLE001
             last_err = exc
-            time.sleep(0.6 * (attempt + 1))
+            time.sleep(0.4 * (attempt + 1))
     if pe_df is None or pe_df.empty:
         # 远端失败时回退过期缓存
         stale = store.get(cache_key, ttl_hours=24 * 30)
@@ -144,7 +146,7 @@ def fetch_index_valuation(
 
     pb_df = None
     try:
-        pb_df = ak.stock_index_pb_lg(symbol=matched)
+        pb_df = call_with_timeout(ak.stock_index_pb_lg, 15, symbol=matched)
     except Exception:
         pb_df = None
 

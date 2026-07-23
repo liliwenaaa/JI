@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from jijin.concurrency import configured_workers
 from jijin.config import load_config
 from jijin.data.market import index_group_of, list_index_names
 from jijin.engine.settings import get_trend_settings
 from jijin.engine.trend import TrendResult, analyze_trend
+
+ProgressCb = Callable[[int, int, str], None]
 
 
 @dataclass
@@ -46,6 +48,7 @@ def scan_index_opportunities(
     force: bool = False,
     top_n: int | None = None,
     horizon: str | None = None,
+    on_progress: ProgressCb | None = None,
 ) -> list[IndexOpportunity]:
     """扫描全部市场指数，按默认展望周期的偏多概率排出前 N。
 
@@ -64,6 +67,14 @@ def scan_index_opportunities(
     workers = configured_workers(cfg, len(universe))
     candidates: list[TrendResult] = []
     errors: list[str] = []
+    total = len(universe)
+    if on_progress is not None:
+        on_progress(0, max(total, 1), f"开始扫描 · {workers} 线程")
+
+    import time
+
+    # 并行提高后适当放宽总时长；仍硬顶防止假死
+    overall_timeout = float((cfg.get("opportunity") or {}).get("scan_timeout_sec") or 90)
 
     def scan_one(name: str) -> TrendResult:
         trend = analyze_trend(name, cfg=cfg, force=force, horizon=horizon_key)
@@ -71,17 +82,54 @@ def scan_index_opportunities(
             raise RuntimeError(str(trend.details["error"]))
         return trend
 
-    with ThreadPoolExecutor(
+    executor = ThreadPoolExecutor(
         max_workers=workers,
         thread_name_prefix="index-scan",
-    ) as executor:
+    )
+    try:
         futures = {executor.submit(scan_one, name): name for name in universe}
-        for future in as_completed(futures):
-            name = futures[future]
-            try:
-                candidates.append(future.result())
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"{name}: {exc}")
+        pending = set(futures)
+        done = 0
+        deadline = time.monotonic() + overall_timeout
+        while pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            finished, pending = wait(
+                pending,
+                timeout=min(2.0, remaining),
+                return_when=FIRST_COMPLETED,
+            )
+            if not finished:
+                if on_progress is not None:
+                    on_progress(
+                        done,
+                        max(total, 1),
+                        f"等待中… 剩余 {len(pending)} 项",
+                    )
+                continue
+            for future in finished:
+                name = futures[future]
+                done += 1
+                try:
+                    candidates.append(future.result(timeout=0))
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"{name}: {exc}")
+                if on_progress is not None:
+                    on_progress(done, max(total, 1), name)
+        if pending:
+            for future in pending:
+                name = futures[future]
+                future.cancel()
+                errors.append(f"{name}: 扫描超时")
+                done += 1
+                if on_progress is not None:
+                    on_progress(min(done, max(total, 1)), max(total, 1), f"{name} · 超时")
+    finally:
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            executor.shutdown(wait=False)
 
     candidates.sort(
         key=lambda t: (float(t.probability_up), float(t.score)),

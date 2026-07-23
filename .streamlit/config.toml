@@ -8,6 +8,8 @@ font = "sans serif"
 
 [server]
 headless = true
+# Cursor/沙箱常占满 inotify；禁用事件监听避免 EMFILE，改代码后手动刷新或重启
+fileWatcherType = "none"
 
 [browser]
 gatherUsageStats = false

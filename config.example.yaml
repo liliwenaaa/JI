@@ -4,16 +4,28 @@ product:
   name: AI Index
   version: "1.0"
 
+# 插件化：页面 / Agent / 策略 / 提醒 / 数据源均可扩展
+plugins:
+  # 只启用列出的页面 id；省略则启用全部内置页面
+  # enabled: [dashboard, opportunity, score, portfolio, alerts, holdings, parameters]
+  disabled: []
+  # 额外插件模块（需提供 register(registry) ）
+  modules: []
+  # 是否扫描 setuptools entry_points 组 jijin.plugins
+  entry_points: true
+
 cache:
   dir: data
   fund_list_ttl_hours: 24
   valuation_ttl_hours: 6
   index_daily_ttl_hours: 12
   macro_ttl_hours: 24
+  # 单个指数分析硬超时（秒）；超时跳过，避免进度卡在最后一项
+  score_index_timeout_sec: 20
 
 performance:
-  # 公开数据接口并发数；建议 4~6，最高限制为 8
-  max_workers: 5
+  # 公开数据接口并发数（I/O 密集）；建议 6~10，上限 12
+  max_workers: 8
 
 trend:
   default_horizon: 1m
@@ -129,16 +141,13 @@ valuation:
 
 opportunity:
   top_n: 15
+  # 全市场扫描总超时（秒）；超时返回已完成的部分结果
+  scan_timeout_sec: 90
   # 可选：全部 / 宽基规模 / 红利风格 / 一级行业 / 金融地产 / 消费医药 / 科技成长 / 周期制造
   universe_group: 全部
 
 portfolio:
   total_assets: 100000
-  index_plans:
-    沪深300: 30
-    中证500: 20
-    中证1000: 15
-    创业板50: 15
   holdings:
     - code: "110020"
       name: 易方达沪深300ETF联接A

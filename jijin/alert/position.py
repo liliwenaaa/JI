@@ -60,17 +60,10 @@ def _action_from_delta(delta: float, min_rebalance: float) -> str:
     return "增持" if delta > 0 else "减持"
 
 
-def _planned_pct(index: str, current_pct: float, cfg: dict[str, Any]) -> float | None:
-    """计划仓位：config portfolio.index_plans > 当前持仓；皆无则 None（仅观察）。"""
-    plans = cfg.get("portfolio", {}).get("index_plans") or {}
-    if index in plans:
-        return float(plans[index])
-    # 模糊匹配计划键
-    for k, v in plans.items():
-        if k in index or index in k:
-            return float(v)
+def _baseline_pct(current_pct: float) -> float | None:
+    """加减仓基准：仅用真实持仓权重；无持仓则只观察。"""
     if current_pct > 0:
-        return current_pct
+        return float(current_pct)
     return None
 
 
@@ -111,10 +104,10 @@ def build_advice_for_index(
 
     band = map_percentile_to_band(float(pct), bands)
     label = str(band.get("label") or "")
-    planned = _planned_pct(index, current_pct, cfg)
+    baseline = _baseline_pct(current_pct)
 
-    # 无计划且无持仓：只观察，不给整仓加减建议
-    if planned is None:
+    # 无真实持仓：只观察，不给整仓加减建议
+    if baseline is None:
         return PositionAdvice(
             index=index,
             label=label,
@@ -128,7 +121,7 @@ def build_advice_for_index(
             suggest_amount=0.0,
             message=(
                 f"{index}: {label}（{metric.upper()}百分位 {pct:.1f}%），"
-                f"当前无持仓/未配置计划仓位，仅观察"
+                f"当前无持仓，仅观察"
             ),
         )
 
@@ -137,7 +130,7 @@ def build_advice_for_index(
         mult = float(band["weight_mult"])
     else:
         mult = float(band["target_pct"]) / ref if ref else 1.0
-    target = max(0.0, planned * mult)
+    target = max(0.0, baseline * mult)
     delta = target - current_pct
     action = _action_from_delta(delta, min_reb)
     amount = total_assets * delta / 100.0
@@ -146,13 +139,13 @@ def build_advice_for_index(
         msg = (
             f"{index}: {label}（{metric.upper()}百分位 {pct:.1f}%），"
             f"当前仓位 {current_pct:.1f}% ≈ 目标 {target:.1f}% "
-            f"（计划 {planned:.1f}% × {mult:.2f}），建议维持"
+            f"（持仓基准 {baseline:.1f}% × {mult:.2f}），建议维持"
         )
     else:
         msg = (
             f"{index}: {label}（{metric.upper()}百分位 {pct:.1f}%），"
             f"当前 {current_pct:.1f}% → 目标 {target:.1f}% "
-            f"（计划 {planned:.1f}% × {mult:.2f}），"
+            f"（持仓基准 {baseline:.1f}% × {mult:.2f}），"
             f"建议{action} {abs(delta):.1f} 个百分点"
             f"（约 {abs(amount):,.0f} 元）"
         )
@@ -180,20 +173,65 @@ def generate_alerts(cfg: dict[str, Any] | None = None, force: bool = False) -> l
     indexes = set(exposure.keys())
     for name in cfg.get("valuation", {}).get("watch_indexes") or []:
         indexes.add(name)
-    for name in (cfg.get("portfolio", {}).get("index_plans") or {}):
-        indexes.add(name)
 
     advices: list[PositionAdvice] = []
-    for index in sorted(indexes):
-        if index == "未分类":
-            continue
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from jijin.concurrency import configured_workers
+    from jijin.utils.timeout import call_with_timeout, index_timeout_sec
+
+    per_index = index_timeout_sec(cfg, 20)
+    names = [i for i in sorted(indexes) if i != "未分类"]
+    workers = configured_workers(cfg, len(names))
+
+    def _fetch(index: str) -> PositionAdvice:
         current = exposure.get(index, {}).get("weight_pct", 0.0)
         try:
-            val = fetch_index_valuation(index, cfg=cfg, force=force)
+            val = call_with_timeout(fetch_index_valuation, per_index, index, cfg=cfg, force=force)
+            return build_advice_for_index(index, current, val, cfg, total)
+        except TimeoutError as exc:
+            return PositionAdvice(
+                index=index,
+                label="错误",
+                percentile=None,
+                metric=cfg.get("valuation", {}).get("metric", "pe"),
+                metric_value=None,
+                current_pct=current,
+                target_pct=current,
+                delta_pct=0.0,
+                action="无法判断",
+                suggest_amount=0.0,
+                message=f"{index}: 估值请求超时 — {exc}",
+            )
         except Exception as exc:  # noqa: BLE001
-            advices.append(
-                PositionAdvice(
-                    index=index,
+            return PositionAdvice(
+                index=index,
+                label="错误",
+                percentile=None,
+                metric=cfg.get("valuation", {}).get("metric", "pe"),
+                metric_value=None,
+                current_pct=current,
+                target_pct=current,
+                delta_pct=0.0,
+                action="无法判断",
+                suggest_amount=0.0,
+                message=f"{index}: 获取估值失败 — {exc}",
+            )
+
+    if not names:
+        return advices
+    executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="pos-val")
+    try:
+        futs = {executor.submit(_fetch, name): name for name in names}
+        by_name: dict[str, PositionAdvice] = {}
+        for fut in as_completed(futs, timeout=per_index * (len(names) / max(workers, 1) + 1)):
+            name = futs[fut]
+            try:
+                by_name[name] = fut.result(timeout=0)
+            except Exception as exc:  # noqa: BLE001
+                current = exposure.get(name, {}).get("weight_pct", 0.0)
+                by_name[name] = PositionAdvice(
+                    index=name,
                     label="错误",
                     percentile=None,
                     metric=cfg.get("valuation", {}).get("metric", "pe"),
@@ -203,11 +241,17 @@ def generate_alerts(cfg: dict[str, Any] | None = None, force: bool = False) -> l
                     delta_pct=0.0,
                     action="无法判断",
                     suggest_amount=0.0,
-                    message=f"{index}: 获取估值失败 — {exc}",
+                    message=f"{name}: {exc}",
                 )
-            )
-            continue
-        advices.append(build_advice_for_index(index, current, val, cfg, total))
+        advices = [by_name[n] for n in names if n in by_name]
+    except TimeoutError:
+        # 已完成的保留
+        pass
+    finally:
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            executor.shutdown(wait=False)
     return advices
 
 

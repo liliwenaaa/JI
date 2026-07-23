@@ -22,13 +22,21 @@ def _cached_frame(
     cfg: dict[str, Any],
     force: bool = False,
 ) -> pd.DataFrame:
+    from jijin.utils.timeout import call_with_timeout
+
     store = _store(cfg)
     if not force:
         cached = store.get(key, _ttl(cfg))
         if cached is not None:
             return pd.DataFrame(cached)
 
-    df = fetcher()
+    try:
+        df = call_with_timeout(fetcher, 30)
+    except TimeoutError:
+        stale = store.get(key, ttl_hours=24 * 30)
+        if stale is not None:
+            return pd.DataFrame(stale)
+        return pd.DataFrame()
     if df is None or df.empty:
         return pd.DataFrame()
     store.set(key, df.to_dict(orient="records"))

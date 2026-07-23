@@ -257,10 +257,14 @@ def score_indexes(
 
     workers = configured_workers(cfg, len(indexes))
     by_index: dict[str, ScoreBreakdown] = {}
-    with ThreadPoolExecutor(
+    from jijin.utils.timeout import index_timeout_sec
+
+    per_index = index_timeout_sec(cfg, 20)
+    executor = ThreadPoolExecutor(
         max_workers=workers,
         thread_name_prefix="index-score",
-    ) as executor:
+    )
+    try:
         futures = {
             executor.submit(
                 compute_ai_score,
@@ -271,12 +275,19 @@ def score_indexes(
             ): index
             for index in indexes
         }
-        for future in as_completed(futures):
+        for future in as_completed(futures, timeout=per_index * (len(indexes) / max(workers, 1) + 1)):
             index = futures[future]
             try:
-                by_index[index] = future.result()
+                by_index[index] = future.result(timeout=0)
             except Exception:
                 continue
+    except TimeoutError:
+        pass
+    finally:
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            executor.shutdown(wait=False)
 
     # Keep caller-supplied ordering stable despite concurrent completion.
     return [by_index[index] for index in indexes if index in by_index]

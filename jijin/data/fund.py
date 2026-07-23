@@ -177,6 +177,9 @@ def _guess_index_from_name(name: str) -> str:
     rules = [
         ("沪深300", "沪深300"),
         ("上证50", "上证50"),
+        ("上证180", "上证180"),
+        ("上证指数", "上证指数"),
+        ("上证综指", "上证指数"),
         ("中证500", "中证500"),
         ("中证1000", "中证1000"),
         ("中证100", "中证100"),
@@ -184,16 +187,16 @@ def _guess_index_from_name(name: str) -> str:
         ("创业板50", "创业板50"),
         ("创业板", "创业板指"),
         ("科创50", "科创50"),
+        ("科创板50", "科创50"),
         ("科创板", "科创50"),
         ("中证红利", "中证红利"),
-        ("红利低波", "红利低波"),
         ("中证消费", "中证消费"),
-        ("证券公司", "中证全指证券公司"),
-        ("银行", "中证银行"),
+        ("证券公司", "证券公司"),
+        ("银行", "国证银行"),
         ("医药", "中证医药"),
         ("军工", "中证军工"),
         ("新能源", "中证新能源"),
-        ("半导体", "国证半导体"),
+        ("半导体", "半导体"),
         ("纳斯达克", "纳斯达克100"),
         ("标普500", "标普500"),
         ("恒生科技", "恒生科技"),
@@ -203,6 +206,95 @@ def _guess_index_from_name(name: str) -> str:
         if kw in n:
             return idx
     return ""
+
+
+def map_to_known_index(name: str, known: list[str] | tuple[str, ...] | None = None) -> str:
+    """把推断/接口返回的指数名映射到本地指数池。"""
+    raw = str(name or "").strip()
+    if not raw or raw.lower() in {"nan", "none"}:
+        return ""
+    if known is not None:
+        options = list(known)
+    else:
+        from jijin.data.market import INDEX_SYMBOLS as _syms
+
+        options = list(_syms.keys())
+    if raw in options:
+        return raw
+    aliases = {
+        "创业板": "创业板指",
+        "中证全指证券公司": "证券公司",
+        "证券公司": "证券公司",
+        "国证半导体": "半导体",
+        "中证银行": "国证银行",
+        "红利低波": "中证红利",
+    }
+    if raw in aliases and aliases[raw] in options:
+        return aliases[raw]
+    for opt in options:
+        if opt in raw or raw in opt:
+            return opt
+    return ""
+
+
+def lookup_fund_by_code(code: str, cfg: dict[str, Any] | None = None) -> dict[str, str] | None:
+    """按基金代码查询名称与跟踪指数；先查指数基金表，再回退个基信息。"""
+    cfg = cfg or load_config()
+    code = re.sub(r"\D", "", str(code or ""))
+    if not code:
+        return None
+    code = code.zfill(6)
+
+    try:
+        table = fetch_index_fund_table(cfg)
+        hit = table.loc[table["code"].astype(str).str.zfill(6) == code]
+        if not hit.empty:
+            row = hit.iloc[0]
+            name = str(row.get("name") or "").strip()
+            tracked = map_to_known_index(str(row.get("tracked_index") or "") or _guess_index_from_name(name))
+            return {"code": code, "name": name, "index": tracked}
+    except Exception:
+        pass
+
+    store = _store(cfg)
+    cache_key = f"fund_lookup:{code}"
+    cached = store.get(cache_key, ttl_hours=24 * 7)
+    if isinstance(cached, dict) and cached.get("name"):
+        return {
+            "code": code,
+            "name": str(cached.get("name") or ""),
+            "index": map_to_known_index(str(cached.get("index") or "")),
+        }
+
+    try:
+        import akshare as ak
+
+        name = ""
+        if hasattr(ak, "fund_individual_basic_info_xq"):
+            info = ak.fund_individual_basic_info_xq(symbol=code)
+            if isinstance(info, pd.DataFrame) and not info.empty:
+                kv: dict[str, Any] = {}
+                if {"item", "value"}.issubset(info.columns):
+                    kv = dict(zip(info["item"], info["value"]))
+                elif info.shape[1] >= 2:
+                    kv = dict(zip(info.iloc[:, 0], info.iloc[:, 1]))
+                name = str(kv.get("基金名称") or kv.get("名称") or kv.get("基金简称") or "").strip()
+        if not name and hasattr(ak, "fund_overview_em"):
+            # 部分版本无此接口；失败则忽略
+            try:
+                ov = ak.fund_overview_em(symbol=code)
+                if isinstance(ov, pd.DataFrame) and not ov.empty:
+                    name = str(ov.iloc[0].get("基金简称") or ov.iloc[0].get("基金名称") or "").strip()
+            except Exception:
+                pass
+        if not name:
+            return None
+        tracked = map_to_known_index(_guess_index_from_name(name))
+        item = {"code": code, "name": name, "index": tracked}
+        store.set(cache_key, item)
+        return item
+    except Exception:
+        return None
 
 
 def _fetch_fee_scale_batch(codes: list[str], store: CacheStore, force: bool = False) -> pd.DataFrame:
